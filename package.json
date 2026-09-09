@@ -334,6 +334,10 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node dist/test/run.js",
+    "test:unit": "npm run compile && node dist/test/run.js --suite unit",
+    "test:integration": "npm run compile && node dist/test/run.js --suite integration",
+    "test:contract": "npm run compile && node dist/test/run.js --suite contract",
+    "verify:vsix": "npm run compile && node dist/test/verifyVsix.js",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {

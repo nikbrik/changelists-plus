@@ -3,7 +3,6 @@
  * 运行：npm test（tsc && node dist/test/run.js）
  */
 import * as assert from 'assert';
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -33,51 +32,10 @@ import {
 } from '../commitEngine';
 import { ChangeDetector, combineStageStates, stageStateOf } from '../changeDetector';
 import { resolveDropTargetId, resolveReorderAfterId } from '../dndTarget';
-
-const GIT = 'git';
-
-function git(dir: string, args: string[], input?: string, env?: NodeJS.ProcessEnv): string {
-  return execFileSync(GIT, args, {
-    cwd: dir,
-    input: input ?? undefined,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    env: env ? { ...process.env, ...env } : undefined,
-  });
-}
-
-function makeRepo(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-test-'));
-  git(dir, ['init', '-b', 'main', '-q']);
-  git(dir, ['config', 'user.email', 't@test']);
-  git(dir, ['config', 'user.name', 'Tester']);
-  return dir;
-}
-
-function writeFile(dir: string, rel: string, content: string): void {
-  const p = path.join(dir, rel);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, content);
-}
-
-function readFile(dir: string, rel: string): string {
-  return fs.readFileSync(path.join(dir, rel), 'utf8');
-}
-
-function commitAll(dir: string, msg: string): void {
-  git(dir, ['add', '-A']);
-  git(dir, ['commit', '-m', msg, '-q']);
-}
-
-function newEngine(dir: string) {
-  const gitSvc = new GitService(GIT);
-  // store 必须放在仓库目录外：在仓库内会成为 untracked 文件，被 ls-files --others
-  // 合成进 freshDiff，污染「未分配」视图（default 批量操作会把 store 文件一起提交/暂存）
-  const store = new ChangelistStore(
-    path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sc-store-')), 'store.json'),
-  );
-  return { gitSvc, store };
-}
+import { GIT, commitAll, git, makeRepo, newEngine } from './gitFixture';
+import { readFile, writeFile } from './fsFixture';
+import { runRegisteredTests, test, unitTest } from './harness';
+import { registerSafetyNetTests } from './safetyNet.test';
 
 /**
  * 两 hunk 场景：f.txt 修改 line2（A）与 line11（B），A 已分配给 changelist。
@@ -123,14 +81,6 @@ function makeHunk(
     removed,
     preview: added[0] ? '+' + added[0] : '',
   };
-}
-
-// ---- 测试收集（顺序执行） ----
-let passed = 0;
-const failures: string[] = [];
-const tests: Array<{ name: string; fn: () => Promise<void> | void }> = [];
-function test(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name, fn });
 }
 
 // ================= parser =================
@@ -265,7 +215,7 @@ test('parser: 未跟踪文件合成 + 二进制检测', () => {
 
 // ================= matching =================
 
-test('matching: 内容哈希匹配与上下文/位置无关', () => {
+unitTest('matching: 内容哈希匹配与上下文/位置无关', () => {
   const rel = 'f.ts';
   const cur = [makeHunk(rel, ['x'], ['y'], 10)];
   const stored: StoredHunk[] = [{ id: cur[0].id, oldStart: 3, oldLines: 1 }];
@@ -273,7 +223,7 @@ test('matching: 内容哈希匹配与上下文/位置无关', () => {
   assert.strictEqual(r.owners[0], stored[0]);
 });
 
-test('matching: 同哈希碰撞按位置最近消解', () => {
+unitTest('matching: 同哈希碰撞按位置最近消解', () => {
   const rel = 'f.ts';
   const cur = [makeHunk(rel, ['x'], ['y'], 10), makeHunk(rel, ['x'], ['y'], 60)];
   const stored: StoredHunk[] = [
@@ -285,7 +235,7 @@ test('matching: 同哈希碰撞按位置最近消解', () => {
   assert.strictEqual(r.owners[1], stored[1]);
 });
 
-test('matching: 位置回退（窗口内重叠≥50%）并回写位置', () => {
+unitTest('matching: 位置回退（窗口内重叠≥50%）并回写位置', () => {
   const rel = 'f.ts';
   const cur = [makeHunk(rel, ['a1', 'a2', 'a3', 'a4', 'a5'], ['b1', 'b2', 'b3', 'b4', 'b5'], 12)];
   const stored: StoredHunk[] = [{ id: 'stale-id', oldStart: 10, oldLines: 5 }];
@@ -294,7 +244,7 @@ test('matching: 位置回退（窗口内重叠≥50%）并回写位置', () => {
   assert.deepStrictEqual(r.updates, [{ id: 'stale-id', oldStart: 12, oldLines: 5 }]);
 });
 
-test('matching: 窗口外/歧义不硬配', () => {
+unitTest('matching: 窗口外/歧义不硬配', () => {
   const rel = 'f.ts';
   const cur = [makeHunk(rel, ['a1', 'a2', 'a3', 'a4', 'a5'], ['b1', 'b2', 'b3', 'b4', 'b5'], 12)];
   const far: StoredHunk[] = [{ id: 'far', oldStart: 200, oldLines: 5 }];
@@ -1762,7 +1712,7 @@ test('parser: -U0 头部格式（无逗号计数 / 纯删除 newLines=0）与可
   }
 });
 
-test('hunkHitsSelection: 纯删除块 old 侧命中 / 新增替换块 new 侧命中 / 部分命中整块', () => {
+unitTest('hunkHitsSelection: 纯删除块 old 侧命中 / 新增替换块 new 侧命中 / 部分命中整块', () => {
   // 纯删除块：old 区间 [5,6]，new 侧为空
   const del = makeHunk('f', ['l5', 'l6'], [], 5, 2);
   assert.strictEqual(hunkHitsSelection(del, 5, 6), true);
@@ -1856,7 +1806,7 @@ test('U0 端到端: 删除块撤销（删除块 + 后续修改块共存）', asy
 
 // ================= 暂存状态圆点（staged 缓存与三态判定） =================
 
-test('staged: stageStateOf / combineStageStates 纯函数边界', () => {
+unitTest('staged: stageStateOf / combineStageStates 纯函数边界', () => {
   assert.strictEqual(stageStateOf([], new Set()), 'none'); // 空 ids
   assert.strictEqual(stageStateOf(['a'], undefined), 'none'); // 无缓存
   assert.strictEqual(stageStateOf(['a'], new Set(['a'])), 'all');
@@ -1870,7 +1820,7 @@ test('staged: stageStateOf / combineStageStates 纯函数边界', () => {
   assert.strictEqual(combineStageStates(['partial', 'all']), 'partial');
 });
 
-test('dnd: 拖放目标解析——default 节点 / 空白 → null（回 default）', () => {
+unitTest('dnd: 拖放目标解析——default 节点 / 空白 → null（回 default）', () => {
   assert.deepStrictEqual(resolveDropTargetId(undefined), { id: null, name: '' });
   assert.deepStrictEqual(
     resolveDropTargetId({ kind: 'unassigned', contextValue: 'unassigned' }),
@@ -1878,7 +1828,7 @@ test('dnd: 拖放目标解析——default 节点 / 空白 → null（回 defaul
   );
 });
 
-test('dnd: 拖放目标解析——changelist 节点 → 其 id', () => {
+unitTest('dnd: 拖放目标解析——changelist 节点 → 其 id', () => {
   assert.deepStrictEqual(
     resolveDropTargetId({ kind: 'changelist', contextValue: 'changelist', label: 'c1', changelistId: 'x1' }),
     { id: 'x1', name: 'c1' },
@@ -1890,7 +1840,7 @@ test('dnd: 拖放目标解析——changelist 节点 → 其 id', () => {
   );
 });
 
-test('dnd: 拖放目标解析——文件行 = 其所在视图（拖到 default 区块内文件上 = 回 default 回归）', () => {
+unitTest('dnd: 拖放目标解析——文件行 = 其所在视图（拖到 default 区块内文件上 = 回 default 回归）', () => {
   // 本次 bug 修复核心：VS Code 的 drop 目标是鼠标下最深节点，
   // 拖到 default 区块内的文件行上应视为拖到 default
   assert.deepStrictEqual(
@@ -1909,7 +1859,7 @@ test('dnd: 拖放目标解析——文件行 = 其所在视图（拖到 default 
   );
 });
 
-test('dnd: 拖放目标解析——repo 行 = 该仓库 default；不可放置节点 → undefined', () => {
+unitTest('dnd: 拖放目标解析——repo 行 = 该仓库 default；不可放置节点 → undefined', () => {
   assert.deepStrictEqual(
     resolveDropTargetId({ kind: 'repo', contextValue: 'repo' }),
     { id: null, name: '' },
@@ -2415,28 +2365,7 @@ test('engine: F1 坐标——混合 hunk（删除+插入同 patch）不偏移', 
   }
 });
 
-// ================= 主入口 =================
+// ================= safety-net contracts =================
 
-async function main(): Promise<void> {
-  const started = Date.now();
-  for (const t of tests) {
-    try {
-      await t.fn();
-      passed++;
-      process.stdout.write('PASS ' + t.name + '\n');
-    } catch (e) {
-      failures.push(t.name + ': ' + (e instanceof Error ? (e.stack ?? e.message) : String(e)));
-      process.stdout.write('FAIL ' + t.name + '\n');
-    }
-  }
-  process.stdout.write(`\n${passed} passed, ${failures.length} failed (${Date.now() - started}ms)\n`);
-  if (failures.length > 0) {
-    process.stdout.write('\n--- Failures ---\n');
-    for (const f of failures) {
-      process.stdout.write(f + '\n\n');
-    }
-    process.exitCode = 1;
-  }
-}
-
-void main();
+registerSafetyNetTests();
+void runRegisteredTests();

@@ -1,5 +1,9 @@
 # 01. Защита от регрессий и тестовый контракт
 
+## Статус
+
+Реализован. Production-код и пользовательское поведение не изменялись.
+
 ## Цель
 
 До изменения production-кода зафиксировать наблюдаемое безопасное поведение расширения и создать тестовую инфраструктуру для аварийных, конкурентных и платформенных сценариев.
@@ -37,3 +41,26 @@
 - В основной ветке нет постоянно падающих тестов; известные нарушения перечислены как явно именованные pending/known-risk cases с ссылкой на целевой эпик.
 - В CI доступны отдельные результаты unit и integration suites, общий прогон завершается ненулевым кодом при любой неожиданной регрессии.
 
+## Реализованный контракт
+
+- Общий runner поддерживает `unit`, `integration` и `contract` suites; `npm test` по-прежнему запускает их вместе.
+- Git/FS fixtures вынесены отдельно, временные пути регистрируются в harness и удаляются после каждого успешного или упавшего теста.
+- Каждый тестовый репозиторий получает локальные identity, `commit.gpgSign=false` и собственный `core.hooksPath`; пользовательские Git-настройки не изменяются.
+- Управляемый fake Git моделирует exit code, stdout/stderr, spawn error и детерминированное зависание через явно освобождаемый gate.
+- Snapshot репозитория сравнивает `HEAD`, реальные index entries, бинарный staged patch, байты worktree и цели симлинков.
+- Fault injection до записи временного index и падающий pre-commit hook проверяют полную сохранность snapshot.
+- Существующие проверки покрывают успешные stage/commit/discard, merge/conflicts, CRLF, binary, untracked, symlink и необычные имена; добавлена отдельная проверка rebase guard.
+- Известные риски эпиков 02–08 зарегистрированы как явно именованные `PENDING KNOWN RISK` и не маскируют неожиданные падения.
+- Manifest contract фиксирует набор критичных destructive/staging commands, security-sensitive `gitPath` и наличие VSIX verifier.
+- `verify:vsix` побайтово сравнивает находящиеся в VSIX `package.json` и compiled JavaScript с checkout и запрещает попадание test-кода в архив.
+- GitHub Actions публикует отдельные результаты `unit`, `integration` и `contract`; каждый job завершается ненулевым кодом при регрессии.
+
+## Команды приёмки
+
+```sh
+npm test
+npm run test:unit
+npm run test:integration
+npm run test:contract
+npm run verify:vsix -- path/to/changelists-plus.vsix
+```
